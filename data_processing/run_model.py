@@ -37,6 +37,8 @@ import numpy as np
 from collections import defaultdict
 import pickle
 
+from user_profile import build_user_profile
+
 def create_popularity_buckets(review_counts_df):
     """
     Create more intelligent popularity buckets using logarithmic scale
@@ -149,17 +151,23 @@ def calculate_diversity_score(movie_df, user_profile):
     """
     Calculate how different each movie is from user's typical preferences
     """
-    if not user_profile or 'average_year' not in user_profile:
+    if not user_profile:
         return 1.0
     
-    # Year diversity
-    year_diff = abs(movie_df['year_released'] - user_profile['average_year']) / 50
+    diversity_components = []
     
-    # Genre diversity (would need genre overlap calculation)
-    # Popularity diversity
-    pop_diversity = abs(movie_df['count'] - user_profile['average_popularity']) / 1000
+    # Year diversity (if user has year preference data)
+    if user_profile.get('average_year') is not None:
+        year_diff = abs(movie_df['year_released'] - user_profile['average_year']) / 50
+        diversity_components.append(year_diff)
     
-    return (year_diff + pop_diversity) / 2
+    # Popularity diversity (if user has popularity preference data)
+    if user_profile.get('average_popularity') is not None:
+        pop_diversity = abs(movie_df['count'] - user_profile['average_popularity']) / 1000
+        diversity_components.append(pop_diversity)
+    
+    # Return average of available diversity components, or default if none available
+    return sum(diversity_components) / len(diversity_components) if diversity_components else 1.0
 
 def calculate_genre_similarity(movie, favorite_genres):
     """
@@ -179,54 +187,11 @@ def calculate_genre_similarity(movie, favorite_genres):
     
     return intersection / union if union > 0 else 0
 
-def build_user_profile(user_data, movie_metadata):
-    """
-    Build a comprehensive user profile for better recommendations
-    """
-    if not user_data:
-        return {}
-    
-    # Convert to dataframe
-    user_df = pd.DataFrame([x for x in user_data if x['rating_val'] > 0])
-    
-    if user_df.empty:
-        return {}
-    
-    # Merge with movie metadata
-    user_df = user_df.merge(movie_metadata, on='movie_id', how='left')
-    
-    # Calculate profile statistics
-    profile = {
-        'total_ratings': len(user_df),
-        'average_rating': user_df['rating_val'].mean(),
-        'rating_std': user_df['rating_val'].std(),
-        'average_year': user_df['year_released'].mean() if 'year_released' in user_df else 2000,
-        'average_popularity': user_df['count'].mean() if 'count' in user_df else 1000,
-    }
-    
-    # Find favorite genres (from highly rated movies)
-    highly_rated = user_df[user_df['rating_val'] >= 8]
-    if not highly_rated.empty and 'genres' in highly_rated.columns:
-        all_genres = []
-        for genres in highly_rated['genres'].dropna():
-            if isinstance(genres, str):
-                all_genres.extend(genres.split(','))
-        
-        from collections import Counter
-        genre_counts = Counter(all_genres)
-        profile['favorite_genres'] = [g[0] for g in genre_counts.most_common(5)]
-    
-    # Rating distribution
-    profile['rating_distribution'] = user_df['rating_val'].value_counts().to_dict()
-    
-    # Preference for obscure vs popular
-    profile['obscurity_preference'] = 1 / (user_df['count'].mean() / 1000) if 'count' in user_df else 1.0
-    
-    return profile
+# build_user_profile moved to user_profile.py to avoid circular imports
 
 def run_model(username, algo, user_watched_list, threshold_movie_list, 
                        movie_metadata_df, user_watchlist=[], num_recommendations=50,
-                       recommendation_mode='best_overall'):
+                       recommendation_mode='best_overall', user_data=None):
     """
     Enhanced model with multiple recommendation modes and better filtering
     """

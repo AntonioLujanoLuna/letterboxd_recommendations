@@ -13,7 +13,7 @@ from surprise.dump import dump
 import random
 import numpy as np
 
-def build_model(df, user_data):
+def build_model(df, user_data, use_normalization=False):
     # print(df.head())
 
     # Set random seed so that returned recs are always the same for same user with same ratings
@@ -28,6 +28,14 @@ def build_model(df, user_data):
     df = pd.concat([df, user_df]).reset_index(drop=True)
     df.drop_duplicates(inplace=True)
     del user_df
+
+    # Check if we should use normalization features
+    if use_normalization:
+        try:
+            from rating_normalization import build_model_with_normalization
+            return build_model_with_normalization(df, user_data)
+        except ImportError:
+            print("Rating normalization module not available, using standard approach")
 
     # Surprise dataset loading
     reader = Reader(rating_scale=(1, 10))

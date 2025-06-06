@@ -8,6 +8,7 @@ from numpy import savetxt
 
 import pickle
 
+from data_processing.run_model import create_popularity_buckets
 import pymongo
 
 from db_connect import connect_to_db
@@ -85,6 +86,7 @@ if __name__ == "__main__":
         ]
     )
     review_counts_df = pd.DataFrame(list(review_count))
+    review_counts_df, popularity_tiers = create_popularity_buckets(review_counts_df)
     review_counts_df.rename(
         columns={"_id": "movie_id", "review_count": "count"}, inplace=True
     )
@@ -111,3 +113,6 @@ if __name__ == "__main__":
     training_df.to_csv("data/training_data.csv", index=False)
     review_counts_df.to_csv("data/review_counts.csv", index=False)
     movie_df.to_csv("../static/data/movie_data.csv", index=False)
+    # Save the popularity tiers
+    with open("models/popularity_tiers.pkl", "wb") as fp:
+        pickle.dump(popularity_tiers, fp)

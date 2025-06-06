@@ -46,7 +46,7 @@ def get_client_user_data(username, data_opt_in):
     return user_data[0]
 
 
-def build_client_model(username, training_data_rows=200000, popularity_threshold=None, num_items=30):
+def build_client_model(username, training_data_rows=500000, popularity_threshold=None, num_items=50):
     # Load user data from previous Redis job
     current_job = get_current_job(conn)
     user_data_job = current_job.dependency
@@ -58,9 +58,32 @@ def build_client_model(username, training_data_rows=200000, popularity_threshold
     df = pd.read_csv('data_processing/data/training_data.csv')
     model_df = df.head(training_data_rows)
 
+    if training_data_rows < len(df):
+        from data_processing.rating_normalization import intelligent_sampling
+        model_df = intelligent_sampling(df, training_data_rows)
+    else:
+        model_df = model_df
+
     # Load in the list of all availble movie ids (passed the threshold of at least five samples in dataset)
     with open("data_processing/models/threshold_movie_list.txt", "rb") as fp:
         threshold_movie_list = pickle.load(fp)
+
+    # Load movie metadata for the new run_model function
+    movie_metadata_df = pd.read_csv('static/data/movie_data.csv')
+    
+    # Merge with review counts for better recommendation modes
+    try:
+        review_counts_df = pd.read_csv('data_processing/data/review_counts.csv')
+        movie_metadata_df = movie_metadata_df.merge(
+            review_counts_df[['movie_id', 'count']], 
+            on='movie_id', 
+            how='left'
+        )
+        # Fill missing counts with a default value
+        movie_metadata_df['count'] = movie_metadata_df['count'].fillna(100)
+    except FileNotFoundError:
+        # If review counts file doesn't exist, add a default count column
+        movie_metadata_df['count'] = 100
 
     # If user has requested only less often reviewed movies, apply review count threshold to the movie id list
     if popularity_threshold:
@@ -75,5 +98,8 @@ def build_client_model(username, training_data_rows=200000, popularity_threshold
     current_job.meta['stage'] = 'running_model'
     current_job.save()
     # Get recommendations from the model, excluding movies a user has watched and return top recommendations (of length num_items)
-    recs = run_model(username, algo, user_watched_list, threshold_movie_list, num_items)
+    # Pass movie metadata, user watchlist, and user data to the new run_model function
+    user_watchlist = current_job.meta.get('user_watchlist', [])
+    recs = run_model(username, algo, user_watched_list, threshold_movie_list, 
+                     movie_metadata_df, user_watchlist, num_items, 'best_overall', user_data)
     return recs    
