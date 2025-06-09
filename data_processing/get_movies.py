@@ -198,27 +198,42 @@ async def get_rich_data(movie_list, db_cursor, mongo_db, tmdb_key):
     base_url = "https://api.themoviedb.org/3/movie/{}?api_key={}"
 
     async with ClientSession() as session:
-        # print("Starting Scrape", time.time() - start)
-
         tasks = []
-        movie_list = [x for x in movie_list if x['tmdb_id']]
-        # Make a request for each ratings page and add to task queue
+        
+        # Fix: Handle both movie objects and movie IDs
+        processed_movies = []
         for movie in movie_list:
-            # print(base_url.format(movie["tmdb_id"], tmdb_key))
-            task = asyncio.ensure_future(fetch_tmdb_data(base_url.format(movie["tmdb_id"], tmdb_key), session, movie, {"movie_id": movie["movie_id"]}))
+            if isinstance(movie, dict):
+                # It's a movie object
+                if movie.get('tmdb_id'):
+                    processed_movies.append(movie)
+            elif isinstance(movie, str):
+                # It's a movie ID string - need to fetch from DB
+                movie_doc = db_cursor.find_one({"movie_id": movie})
+                if movie_doc and movie_doc.get('tmdb_id'):
+                    processed_movies.append(movie_doc)
+        
+        # Make requests for movies with TMDB IDs
+        for movie in processed_movies:
+            task = asyncio.ensure_future(
+                fetch_tmdb_data(
+                    base_url.format(movie["tmdb_id"], tmdb_key), 
+                    session, 
+                    movie, 
+                    {"movie_id": movie["movie_id"]}
+                )
+            )
             tasks.append(task)
 
-        # Gather all ratings page responses
+        # Gather all responses
         upsert_operations = await asyncio.gather(*tasks)
 
     try:
         if len(upsert_operations) > 0:
-            # Create/reference "ratings" collection in db
             movies = mongo_db.movies
             movies.bulk_write(upsert_operations, ordered=False)
     except BulkWriteError as bwe:
         pprint(bwe.details)
-
 
 def main(data_type="letterboxd"):
     # Connect to MongoDB client

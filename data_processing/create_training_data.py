@@ -10,17 +10,33 @@ import pickle
 
 from data_processing.run_model import create_popularity_buckets
 import pymongo
-
+import time
+import random
 from db_connect import connect_to_db
 
 
-def get_sample(cursor, iteration_size):
-    while True:
+def get_sample(cursor, iteration_size, max_retries=5):
+    """
+    Get a sample from MongoDB with retry logic
+    """
+    for attempt in range(max_retries):
         try:
             rating_sample = cursor.aggregate([{"$sample": {"size": iteration_size}}])
             return list(rating_sample)
-        except pymongo.errors.OperationFailure:
-            print("Encountered $sample operation error. Retrying...")
+        except pymongo.errors.OperationFailure as e:
+            print(f"Encountered $sample operation error on attempt {attempt + 1}/{max_retries}: {e}")
+            if attempt == max_retries - 1:
+                print("Max retries reached. Trying alternative sampling method...")
+                # Fallback: use skip and limit with random offset
+                total_docs = cursor.count_documents({})
+                if total_docs > iteration_size:
+                    skip_amount = random.randint(0, total_docs - iteration_size)
+                    return list(cursor.find().skip(skip_amount).limit(iteration_size))
+                else:
+                    return list(cursor.find().limit(iteration_size))
+            time.sleep(2 ** attempt)  # Exponential backoff
+    
+    return [] 
 
 
 def create_training_data(db_client, sample_size=200000):

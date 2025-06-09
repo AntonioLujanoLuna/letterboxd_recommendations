@@ -9,13 +9,14 @@ from surprise.model_selection import GridSearchCV
 from surprise import SVD
 from surprise.dump import load
 
+import os
+import pymongo
+
 import pickle
 import pandas as pd
 import random
 
-import os
-
-import pymongo
+from user_profile import build_user_profile
 
 try:
     from .db_config import config
@@ -28,16 +29,6 @@ def get_top_n(predictions, n=20):
     top_n.sort(key=lambda x: (x[1], random.random()), reverse=True)
 
     return top_n[:n]
-
-
-#!/usr/local/bin/python3.11
-
-import pandas as pd
-import numpy as np
-from collections import defaultdict
-import pickle
-
-from user_profile import build_user_profile
 
 def create_popularity_buckets(review_counts_df):
     """
@@ -187,8 +178,6 @@ def calculate_genre_similarity(movie, favorite_genres):
     
     return intersection / union if union > 0 else 0
 
-# build_user_profile moved to user_profile.py to avoid circular imports
-
 def run_model(username, algo, user_watched_list, threshold_movie_list, 
                        movie_metadata_df, user_watchlist=[], num_recommendations=50,
                        recommendation_mode='best_overall', user_data=None):
@@ -225,9 +214,7 @@ def run_model(username, algo, user_watched_list, threshold_movie_list,
     top_n.sort(key=lambda x: x[1], reverse=True)
     
     # Build user profile
-    from handle_recs import get_client_user_data
-    user_data = get_client_user_data(username, False)
-    user_profile = build_user_profile(user_data, movie_metadata_df)
+    user_profile = build_user_profile(user_data, movie_metadata_df) if user_data else {}
     
     # Get recommendations in different modes
     all_recommendations = get_recommendation_modes(
