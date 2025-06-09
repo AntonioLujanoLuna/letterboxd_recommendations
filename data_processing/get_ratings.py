@@ -16,15 +16,8 @@ from pprint import pprint
 from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
 
-if os.getcwd().endswith("data_processing"):
-    from db_connect import connect_to_db
-else:
-    from data_processing.db_connect import connect_to_db
-
-if __name__ == "__main__" or os.getcwd().endswith("data_processing"):
-    from utils import utils
-else:
-    from data_processing.utils import utils
+from .db_connect import connect_to_db
+from .utils import utils
 
 
 async def fetch(url, session, input_data={}):

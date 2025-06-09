@@ -18,10 +18,7 @@ from pprint import pprint
 
 import os
 
-if os.getcwd().endswith("/data_processing"):
-    from get_ratings import get_user_ratings
-else:
-    from data_processing.get_ratings import get_user_ratings
+from .get_ratings import get_user_ratings
 
 
 def get_page_count(username):

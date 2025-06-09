@@ -21,11 +21,12 @@ At that point, if you'd like to run the crawl on your own, you can just run the 
 
 If you'd like to run the web server with the front-end locally, you'll need to run a local Redis instance, as well. You can then run `pipenv run python worker.py` to activate the Redis worker in the background and run start the web server by running `pipenv run uvicorn main:app --reload`. Navigate into the `frontend` directory and run `npm install` to install packages and then `npm start` to start the frontend React app.
 
-
 ### Built With
 * Python (requests/BeautifulSoup/asyncio/aiohttp) to scrape review data
 * MongoDB (pymongo) to store user/rating/movie data
-* FastAPI as a python web server
+* **FastAPI** as a python web server
 * HTML/CSS/Javascript/React/MaterialUI on the front-end
 * Redis/redis queue for managing queued tasks (scraping user data, building/running the model)
+* **Scikit-surprise** for collaborative filtering (SVD algorithm)
+* Pandas and NumPy for data processing
 * Heroku/Vercel for hosting
