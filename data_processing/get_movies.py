@@ -17,7 +17,13 @@ from tqdm import tqdm
 from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
 
-from db_connect import connect_to_db
+
+from db_connect import DatabaseConnection, connect_to_db
+from config import Config
+from data_processing.utils.logging_config import setup_logger
+from data_processing.utils.rate_limiter import RateLimiter, fetch_with_retry
+
+logger = setup_logger('letterboxd.scraper')
 
 async def fetch_letterboxd(url, session, input_data={}):
     async with session.get(url) as r:
@@ -235,60 +241,179 @@ async def get_rich_data(movie_list, db_cursor, mongo_db, tmdb_key):
     except BulkWriteError as bwe:
         pprint(bwe.details)
 
-def main(data_type="letterboxd"):
-    # Connect to MongoDB client
-    db_name, client, tmdb_key = connect_to_db()
-
-    db = client[db_name]
-    movies = db.movies
-
-    # Find all movies with missing metadata, which implies that they were added during get_ratings and have not been scraped yet
-    # All other movies have already had their data scraped and since this is almost always unchanging data, we won't rescrape 200,000+ records
-    if data_type == "letterboxd":
-        newly_added = [x['movie_id'] for x in list(movies.find({ "tmdb_id": { "$exists": False }}))]
-        needs_update = [x['movie_id'] for x in list(movies.find({ "tmdb_id": { "$exists": True}}).sort("last_updated", -1).limit(6000))]
-        all_movies = needs_update + newly_added
-    elif data_type == "poster":
-        two_months_ago = datetime.datetime.now() - datetime.timedelta(days=60)
-        all_movies = [x['movie_id'] for x in list(movies.find({"$or":[  {"image_url": {"$exists": False} },  {"last_updated": {"$lte": two_months_ago} } ]}))]
-    else:
-        all_movies = [x for x in list(movies.find({ "genres": { "$exists": False }, "tmdb_id": {"$ne": ""}, "tmdb_id": { "$exists": True }}))]
-    
-    loop = asyncio.get_event_loop()
-    chunk_size = 12
-    num_chunks = len(all_movies) // chunk_size + 1
-
-    print("Total Movies to Scrape:", len(all_movies))
-    print('Total Chunks:', num_chunks)
-    print("=======================\n")
-
-    pbar = tqdm(range(num_chunks))
-    for chunk_i in pbar:
-        pbar.set_description(f"Scraping chunk {chunk_i+1} of {num_chunks}")
-
-        if chunk_i == num_chunks - 1:
-            chunk = all_movies[chunk_i*chunk_size:]
-        else:
-            chunk = all_movies[chunk_i*chunk_size:(chunk_i+1)*chunk_size]
-
-        for attempt in range(5):
-            try:
-                if data_type == "letterboxd":
-                    future = asyncio.ensure_future(get_movies(chunk, movies, db))
-                elif data_type == "poster":
-                    future = asyncio.ensure_future(get_movie_posters(chunk, movies, db))
-                else:
-                    future = asyncio.ensure_future(get_rich_data(chunk, movies, db, tmdb_key))
-                loop.run_until_complete(future)
-            except Exception as e:
-                print(f"Error: {e}")
-                print(f"Error on attempt {attempt+1}, retrying...")
-            else:
-                break
-        else:
-            print(f"Count not complete requests for chunk {chunk_i+1}")
+async def process_movie_response(response_data, input_data):
+    """Process movie response with validation"""
+    try:
+        from utils.validation import DataValidator
         
-    return
+        soup = BeautifulSoup(response_data, "lxml")
+        movie_header = soup.find('section', attrs={'id': 'featured-film-header'})
+
+        # Extract data with better error handling
+        movie_title = ''
+        year = None
+        imdb_id = ''
+        tmdb_id = ''
+        imdb_link = ''
+        tmdb_link = ''
+
+        if movie_header:
+            try:
+                title_elem = movie_header.find('h1')
+                movie_title = title_elem.text.strip() if title_elem else ''
+            except AttributeError:
+                pass
+
+            try:
+                year_elem = movie_header.find('small', attrs={'class': 'number'})
+                if year_elem:
+                    year_link = year_elem.find('a')
+                    if year_link:
+                        year = int(year_link.text)
+            except (AttributeError, ValueError):
+                pass
+
+        # Extract external IDs with better error handling
+        try:
+            imdb_elem = soup.find("a", attrs={"data-track-action": "IMDb"})
+            if imdb_elem and 'href' in imdb_elem.attrs:
+                imdb_link = imdb_elem['href']
+                imdb_id = imdb_link.split('/title')[1].strip('/').split('/')[0]
+        except (KeyError, IndexError, AttributeError):
+            pass
+
+        try:
+            tmdb_elem = soup.find("a", attrs={"data-track-action": "TMDb"})
+            if tmdb_elem and 'href' in tmdb_elem.attrs:
+                tmdb_link = tmdb_elem['href']
+                tmdb_id = tmdb_link.split('/movie')[1].strip('/').split('/')[0]
+        except (KeyError, IndexError, AttributeError):
+            pass
+
+        movie_object = {
+            "movie_id": input_data["movie_id"],
+            "movie_title": movie_title,
+            "year_released": year,
+            "imdb_link": imdb_link,
+            "tmdb_link": tmdb_link,
+            "imdb_id": imdb_id,
+            "tmdb_id": tmdb_id,
+            "last_updated": datetime.datetime.now()
+        }
+
+        # Validate the movie data
+        validated_movie, errors = DataValidator.validate_movie_data(movie_object)
+        
+        if errors:
+            logger.warning(f"Validation errors for movie {input_data['movie_id']}: {errors}")
+
+        return UpdateOne(
+            {"movie_id": input_data["movie_id"]},
+            {"$set": validated_movie},
+            upsert=True
+        )
+        
+    except Exception as e:
+        logger.error(f"Error processing movie {input_data['movie_id']}: {str(e)}")
+        return None
+
+async def get_movies_with_rate_limiting(movie_list, db_cursor, mongo_db):
+    """Get movies with proper rate limiting"""
+    url = "https://letterboxd.com/film/{}/"
+    rate_limiter = RateLimiter(requests_per_second=Config.REQUEST_DELAY)
+    
+    async with ClientSession() as session:
+        tasks = []
+        for movie in movie_list:
+            task = asyncio.ensure_future(
+                fetch_with_retry(
+                    url.format(movie), 
+                    session, 
+                    rate_limiter,
+                    input_data={"movie_id": movie}
+                )
+            )
+            tasks.append(task)
+
+        # Process responses with validation
+        responses = await asyncio.gather(*tasks)
+        upsert_operations = []
+        
+        for response_data, input_data in responses:
+            if response_data:
+                operation = await process_movie_response(response_data, input_data)
+                if operation:
+                    upsert_operations.append(operation)
+
+    # Bulk write to database
+    if upsert_operations:
+        try:
+            movies = mongo_db.movies
+            movies.bulk_write(upsert_operations, ordered=False)
+            logger.info(f"Successfully processed {len(upsert_operations)} movies")
+        except BulkWriteError as bwe:
+            logger.error(f"Bulk write error: {bwe.details}")
+
+def main(data_type="letterboxd"):
+    """Main function with improved error handling and rate limiting"""
+    try:
+        # Use context manager for database connection
+        with DatabaseConnection() as (db, tmdb_key):
+            movies = db.movies
+            
+            # Find movies to scrape based on data type
+            if data_type == "letterboxd":
+                newly_added = [x['movie_id'] for x in list(movies.find({ "tmdb_id": { "$exists": False }}))]
+                needs_update = [x['movie_id'] for x in list(movies.find({ "tmdb_id": { "$exists": True}}).sort("last_updated", -1).limit(6000))]
+                all_movies = needs_update + newly_added
+            elif data_type == "poster":
+                two_months_ago = datetime.datetime.now() - datetime.timedelta(days=60)
+                all_movies = [x['movie_id'] for x in list(movies.find({"$or":[  {"image_url": {"$exists": False} },  {"last_updated": {"$lte": two_months_ago} } ]}))]
+            else:
+                all_movies = [x for x in list(movies.find({ "genres": { "$exists": False }, "tmdb_id": {"$ne": ""}, "tmdb_id": { "$exists": True }}))]
+            
+            # Process in chunks with improved error handling
+            chunk_size = Config.CHUNK_SIZE_MOVIES
+            num_chunks = len(all_movies) // chunk_size + 1
+
+            logger.info(f"Total Movies to Scrape: {len(all_movies)}")
+            logger.info(f"Total Chunks: {num_chunks}")
+
+            pbar = tqdm(range(num_chunks))
+            for chunk_i in pbar:
+                pbar.set_description(f"Scraping chunk {chunk_i+1} of {num_chunks}")
+
+                if chunk_i == num_chunks - 1:
+                    chunk = all_movies[chunk_i*chunk_size:]
+                else:
+                    chunk = all_movies[chunk_i*chunk_size:(chunk_i+1)*chunk_size]
+
+                # Retry logic with exponential backoff
+                for attempt in range(Config.MAX_RETRIES):
+                    try:
+                        if data_type == "letterboxd":
+                            future = asyncio.ensure_future(get_movies_with_rate_limiting(chunk, movies, db))
+                        elif data_type == "poster":
+                            future = asyncio.ensure_future(get_movie_posters(chunk, movies, db))
+                        else:
+                            future = asyncio.ensure_future(get_rich_data(chunk, movies, db, tmdb_key))
+                        
+                        loop = asyncio.get_event_loop()
+                        loop.run_until_complete(future)
+                        break  # Success, exit retry loop
+                        
+                    except Exception as e:
+                        logger.error(f"Error on attempt {attempt+1}/{Config.MAX_RETRIES}: {e}")
+                        if attempt < Config.MAX_RETRIES - 1:
+                            wait_time = 2 ** attempt
+                            logger.info(f"Waiting {wait_time}s before retry...")
+                            time.sleep(wait_time)
+                else:
+                    logger.error(f"Failed to complete requests for chunk {chunk_i+1} after {Config.MAX_RETRIES} attempts")
+            
+    except Exception as e:
+        logger.error(f"Database connection error: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main("letterboxd")

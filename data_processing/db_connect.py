@@ -81,6 +81,18 @@ class DatabaseConnection:
             self.client.close()
             logger.info("Database connection closed")
 
+    def __enter__(self):
+        """Context manager entry"""
+        self.connect()
+        return self.db, self.tmdb_key
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit"""
+        self.close()
+        if exc_type:
+            logger.error(f"Database operation failed: {exc_val}")
+        return False
+
 # Backwards compatibility function
 def connect_to_db() -> Tuple[str, pymongo.MongoClient, str]:
     """

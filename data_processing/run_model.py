@@ -1,6 +1,8 @@
 #!/usr/local/bin/python3.11
 
 from collections import defaultdict
+import numpy as np
+import pandas as pd  
 
 from surprise import Dataset
 from surprise import SVD
@@ -13,16 +15,12 @@ import os
 import pymongo
 
 import pickle
-import pandas as pd
 import random
 
-from user_profile import build_user_profile
-
 try:
-    from .db_config import config
+    from data_processing.user_profile import build_user_profile
 except ImportError:
-    config = None
-
+    from user_profile import build_user_profile
 
 def get_top_n(predictions, n=20):
     top_n = [(iid, est) for uid, iid, true_r, est, _ in predictions]

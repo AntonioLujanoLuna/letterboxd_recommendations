@@ -15,9 +15,11 @@ from rq.registry import DeferredJobRegistry
 
 from worker import conn
 from handle_recs import get_client_user_data, build_client_model
+
 from config import Config
-from utils.logging_config import setup_logger
-from utils.validation import ValidationError
+
+from data_processing.utils.logging_config import setup_logger
+from data_processing.utils.validation import ValidationError
 
 # Setup logging
 logger = setup_logger('letterboxd.api')

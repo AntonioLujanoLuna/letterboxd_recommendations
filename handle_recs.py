@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 
 from rq import Queue, get_current_job
 from rq.job import Job
-from rq.registry import FinishedJobRegistry
+from rq.registry import FinishedJobRegistry, DeferredJobRegistry
 
 from data_processing.get_user_ratings import get_user_data
 from data_processing.get_user_watchlist import get_watchlist_data
@@ -267,8 +267,6 @@ def build_client_model(username: str,
         current_job.save()
         
         raise ValueError(f"Model building failed: {str(e)}")
-
-# Additional utility functions for monitoring and debugging
 
 def get_job_statistics() -> Dict[str, Any]:
     """Get statistics about current jobs"""
