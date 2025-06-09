@@ -34,26 +34,9 @@ class DatabaseManager:
             self._initialize_connection()
     
     def _get_config(self):
-        """Get database configuration from local file or environment"""
-        if LOCAL_CONFIG_AVAILABLE and db_config:
-            return {
-                'db_name': db_config["MONGO_DB"],
-                'connection_url': db_config.get("CONNECTION_URL"),
-                'username': db_config.get("MONGO_USERNAME"),
-                'password': db_config.get("MONGO_PASSWORD"),
-                'cluster_id': db_config.get("MONGO_CLUSTER_ID"),
-                'tmdb_key': tmdb_key
-            }
-        else:
-            # Fallback to environment variables
-            return {
-                'db_name': os.environ.get('MONGO_DB'),
-                'connection_url': os.environ.get("CONNECTION_URL"),
-                'username': os.environ.get("MONGO_USERNAME"),
-                'password': os.environ.get("MONGO_PASSWORD"),
-                'cluster_id': os.environ.get("MONGO_CLUSTER_ID"),
-                'tmdb_key': os.environ.get('TMDB_KEY')
-            }
+        """Get database configuration from Config class"""
+        config_instance = Config()
+        return config_instance.get_db_config()
     
     def _initialize_connection(self):
         """Initialize MongoDB connection with proper settings"""

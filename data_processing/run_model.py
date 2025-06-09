@@ -122,18 +122,6 @@ def get_recommendation_modes(predictions, movie_metadata, user_profile, watchlis
         .to_dict('records')
     )
     
-    # 5. Critically Acclaimed (high rating + awards/recognition)
-    # This would need additional data, but here's the structure
-    if 'critic_score' in pred_df.columns:
-        pred_df['critical_score'] = (
-            pred_df['predicted_rating'] * 0.5 + 
-            pred_df['critic_score'] * 0.5
-        )
-        recommendations['critically_acclaimed'] = (
-            pred_df.nlargest(50, 'critical_score')
-            .to_dict('records')
-        )
-    
     return recommendations
 
 def calculate_diversity_score(movie_df, user_profile):

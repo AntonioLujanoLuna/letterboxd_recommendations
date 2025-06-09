@@ -43,27 +43,31 @@ def get_sample(collection, iteration_size, max_retries=5):
     
     return []
 
-
 def create_training_data(db_client, sample_size=200000):
     ratings = db_client.ratings
-
+    
     all_ratings = []
-    unique_records = 0
-    while unique_records < sample_size:
-        rating_sample = get_sample(ratings, 100000)
-        all_ratings += rating_sample
-        unique_records = len(set([(x["movie_id"] + x["user_id"]) for x in all_ratings]))
-        print(unique_records)
-
-    df = pd.DataFrame(all_ratings)
+    seen_pairs = set()  # Track unique user-movie pairs
+    
+    while len(seen_pairs) < sample_size:
+        rating_sample = get_sample(ratings, min(100000, sample_size - len(seen_pairs)))
+        
+        # Only add new unique ratings
+        for rating in rating_sample:
+            pair_key = (rating["user_id"], rating["movie_id"])
+            if pair_key not in seen_pairs:
+                seen_pairs.add(pair_key)
+                all_ratings.append(rating)
+                
+        if len(all_ratings) >= sample_size:
+            break
+            
+        print(f"Unique records: {len(seen_pairs)}")
+    
+    # Convert to DataFrame only with needed data
+    df = pd.DataFrame(all_ratings[:sample_size])
     df = df[["user_id", "movie_id", "rating_val"]]
-    df.drop_duplicates(inplace=True)
-    df = df.head(sample_size)
-
-    print(df.head())
-
     return df
-
 
 def create_movie_data_sample(db_client, movie_list):
     movies = db_client.movies

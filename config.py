@@ -60,8 +60,8 @@ class RedisConfig:
     """Redis-specific configuration"""
     url: str = 'redis://localhost:6379'
     queues: List[str] = None
-    job_result_ttl: int = 45  # seconds
-    job_ttl: int = 200  # seconds
+    job_result_ttl: int = 300  # seconds
+    job_ttl: int = 600  # seconds
     
     def __post_init__(self):
         if self.queues is None:
@@ -93,12 +93,8 @@ class Config:
     def get_db_config(self) -> Dict[str, Any]:
         """Get database configuration from environment or config file"""
         try:
-            # Try to import from local config file first
-            if os.getcwd().endswith("data_processing"):
-                from db_config import config, tmdb_key
-            else:
-                from data_processing.db_config import config, tmdb_key
-            
+            from data_processing.db_connect import get_database
+            _, tmdb_key = get_database()
             return {
                 'db_name': config["MONGO_DB"],
                 'connection_url': config.get("CONNECTION_URL"),

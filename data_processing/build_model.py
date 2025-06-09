@@ -187,7 +187,7 @@ def load_model(model_path: str = "models/mini_model.pkl",
         raise
 
 if __name__ == "__main__":
-    from .get_user_ratings import get_user_data
+    from data_processing.get_user_ratings import get_user_data
     
     # Load ratings data
     df = pd.read_csv('data/training_data.csv')
