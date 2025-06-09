@@ -42,17 +42,6 @@ class MemoryManager:
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # Force cleanup of variables
-        for var_name in self.variables:
-            if var_name in locals() or var_name in globals():
-                try:
-                    if var_name in locals():
-                        del locals()[var_name]
-                    if var_name in globals():
-                        del globals()[var_name]
-                except:
-                    pass
-        
         # Force garbage collection
         gc.collect()
         

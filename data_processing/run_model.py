@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3.11
+#!/usr/bin/env python3
 
 from collections import defaultdict
 import numpy as np
@@ -73,7 +73,10 @@ def get_recommendation_modes(predictions, movie_metadata, user_profile, watchlis
     pred_df = pred_df.merge(movie_metadata, on='movie_id', how='left')
     
     # Calculate additional scores
-    pred_df['diversity_score'] = calculate_diversity_score(pred_df, user_profile)
+    pred_df['diversity_score'] = pred_df.apply(
+        lambda row: calculate_diversity_score(row, user_profile), 
+        axis=1
+    )
     pred_df['novelty_score'] = 1 / (np.log10(pred_df['count'] + 10))
     
     # Create different recommendation lists

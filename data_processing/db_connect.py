@@ -5,15 +5,6 @@ from typing import Tuple, Optional
 from contextlib import contextmanager
 from config import Config
 
-# Try to import local config, fallback to environment
-try:
-    from .db_config import config as db_config, tmdb_key
-    LOCAL_CONFIG_AVAILABLE = True
-except (ImportError, ModuleNotFoundError):
-    LOCAL_CONFIG_AVAILABLE = False
-    db_config = None
-    tmdb_key = None
-
 class DatabaseManager:
     """Singleton database manager with connection pooling"""
     

@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3.11
+#!/usr/bin/env python3
 
 from re import U
 from bs4 import BeautifulSoup

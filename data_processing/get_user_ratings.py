@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3.11
+#!/usr/bin/env python3
 
 from re import U
 from bs4 import BeautifulSoup
@@ -79,13 +79,9 @@ def get_user_data(username, data_opt_in=False):
 
 
 def send_to_db(username, display_name, user_ratings):
-    database_url = os.getenv("DATABASE_URL", None)
+    from data_processing.db_connect import get_database
 
-    if database_url:
-        client = pymongo.MongoClient(
-            database_url, server_api=pymongo.server_api.ServerApi("1")
-        )
-        db = client["letterboxd"]
+    with get_database() as (db, tmdb_key):
         users = db.users
         ratings = db.ratings
         movies = db.movies

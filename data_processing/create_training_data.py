@@ -1,4 +1,4 @@
-#!/usr/local/bin/python3.11
+#!/usr/bin/env python3
 
 import pandas as pd
 
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     with open("models/threshold_movie_list.txt", "wb") as fp:
         pickle.dump(threshold_movie_list, fp)
 
-    training_df.to_csv("data/training_data.csv", index=False)
+    training_df.to_csv("data_processing/data/training_data.csv", index=False)
     review_counts_df.to_csv("data/review_counts.csv", index=False)
     movie_df.to_csv("../static/data/movie_data.csv", index=False)
     # Save the popularity tiers

@@ -91,28 +91,15 @@ class Config:
         self.redis.job_ttl = int(os.getenv('JOB_TTL', self.redis.job_ttl))
     
     def get_db_config(self) -> Dict[str, Any]:
-        """Get database configuration from environment or config file"""
-        try:
-            from data_processing.db_connect import get_database
-            _, tmdb_key = get_database()
-            return {
-                'db_name': config["MONGO_DB"],
-                'connection_url': config.get("CONNECTION_URL"),
-                'username': config.get("MONGO_USERNAME"),
-                'password': config.get("MONGO_PASSWORD"), 
-                'cluster_id': config.get("MONGO_CLUSTER_ID"),
-                'tmdb_key': tmdb_key
-            }
-        except (ImportError, ModuleNotFoundError):
-            # Fallback to environment variables
-            return {
-                'db_name': os.environ.get('MONGO_DB'),
-                'connection_url': os.environ.get("CONNECTION_URL"),
-                'username': os.environ.get("MONGO_USERNAME"),
-                'password': os.environ.get("MONGO_PASSWORD"),
-                'cluster_id': os.environ.get("MONGO_CLUSTER_ID"),
-                'tmdb_key': os.environ.get('TMDB_KEY')
-            }
+        """Get database configuration from environment"""
+        return {
+            'db_name': os.environ.get('MONGO_DB'),
+            'connection_url': os.environ.get("CONNECTION_URL"),
+            'username': os.environ.get("MONGO_USERNAME"),
+            'password': os.environ.get("MONGO_PASSWORD"), 
+            'cluster_id': os.environ.get("MONGO_CLUSTER_ID"),
+            'tmdb_key': os.environ.get('TMDB_KEY')
+        }
     
     @classmethod
     def validate_username(cls, username: str) -> bool:
@@ -162,14 +149,3 @@ class Config:
 
 # Global config instance
 config = Config()
-
-# Backwards compatibility constants
-MAX_PAGES_PER_USER = config.scraping.max_pages_per_user
-CHUNK_SIZE_MOVIES = config.scraping.chunk_size_movies
-CHUNK_SIZE_RATINGS = config.scraping.chunk_size_ratings
-REQUEST_DELAY = config.scraping.request_delay
-MAX_RETRIES = config.scraping.max_retries
-POPULARITY_THRESHOLDS_500K = config.model.popularity_thresholds_500k
-DEFAULT_TRAINING_SIZE = config.model.default_training_size
-MAX_TRAINING_SIZE = config.model.max_training_size
-MIN_REVIEW_THRESHOLD = config.model.min_review_threshold
