@@ -74,7 +74,10 @@ def build_model(df: pd.DataFrame, user_data: List[Dict[str, Any]],
             try:
                 from .rating_normalization import build_model_with_normalization
                 logger.info("Using rating normalization")
-                return build_model_with_normalization(df, user_data)
+                algo, user_watched_list, user_stats = build_model_with_normalization(df, user_data)
+                # Store user_stats in algo for later use if needed
+                algo.user_stats = user_stats
+                return algo, user_watched_list
             except ImportError:
                 logger.warning("Rating normalization module not available, using standard approach")
         

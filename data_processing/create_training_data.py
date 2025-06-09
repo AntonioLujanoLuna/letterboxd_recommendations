@@ -12,31 +12,36 @@ from data_processing.run_model import create_popularity_buckets
 import pymongo
 import time
 import random
-from db_connect import connect_to_db
+from data_processing.db_connect import connect_to_db
 
-
-def get_sample(cursor, iteration_size, max_retries=5):
+def get_sample(collection, iteration_size, max_retries=5):
     """
     Get a sample from MongoDB with retry logic
+    
+    Args:
+        collection: MongoDB collection (not a cursor!)
+        iteration_size: Number of documents to sample
+        max_retries: Maximum number of retry attempts
     """
     for attempt in range(max_retries):
         try:
-            rating_sample = cursor.aggregate([{"$sample": {"size": iteration_size}}])
+            # Use aggregation pipeline for sampling
+            rating_sample = collection.aggregate([{"$sample": {"size": iteration_size}}])
             return list(rating_sample)
         except pymongo.errors.OperationFailure as e:
             print(f"Encountered $sample operation error on attempt {attempt + 1}/{max_retries}: {e}")
             if attempt == max_retries - 1:
                 print("Max retries reached. Trying alternative sampling method...")
                 # Fallback: use skip and limit with random offset
-                total_docs = cursor.count_documents({})
+                total_docs = collection.estimated_document_count()
                 if total_docs > iteration_size:
-                    skip_amount = random.randint(0, total_docs - iteration_size)
-                    return list(cursor.find().skip(skip_amount).limit(iteration_size))
+                    skip_amount = random.randint(0, max(0, total_docs - iteration_size))
+                    return list(collection.find().skip(skip_amount).limit(iteration_size))
                 else:
-                    return list(cursor.find().limit(iteration_size))
+                    return list(collection.find().limit(iteration_size))
             time.sleep(2 ** attempt)  # Exponential backoff
     
-    return [] 
+    return []
 
 
 def create_training_data(db_client, sample_size=200000):

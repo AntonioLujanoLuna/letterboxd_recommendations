@@ -152,7 +152,7 @@ async def fetch_tmdb_data(url, session, movie_data, input_data={}):
         return update_operation
 
 
-async def get_movies(movie_list, db_cursor, mongo_db):
+async def get_movies(movie_list, db_collection):  # Changed: removed mongo_db, renamed db_cursor to db_collection
     if not movie_list:
         return
 
@@ -187,13 +187,12 @@ async def get_movies(movie_list, db_cursor, mongo_db):
     # Bulk write to database
     if update_operations:
         try:
-            db_collection.bulk_write(update_operations, ordered=False)
+            db_collection.bulk_write(update_operations, ordered=False)  # Now uses the parameter
             logger.info(f"Successfully updated {len(update_operations)} movies in database")
         except BulkWriteError as bwe:
             logger.error(f"Bulk write error: {bwe.details}")
 
-
-async def get_movie_posters(movie_list, db_cursor, mongo_db):
+async def get_movie_posters(movie_list, db_collection):  # Changed parameters
     if not movie_list:
         return
 
@@ -220,51 +219,111 @@ async def get_movie_posters(movie_list, db_cursor, mongo_db):
 
     if update_operations:
         try:
-            db_collection.bulk_write(update_operations, ordered=False)
+            db_collection.bulk_write(update_operations, ordered=False)  # Now uses the parameter
             logger.info(f"Successfully updated {len(update_operations)} movie posters")
         except BulkWriteError as bwe:
             logger.error(f"Bulk write error: {bwe.details}")
 
-async def get_rich_data(movie_list, db_cursor, mongo_db, tmdb_key):
+async def get_rich_data(movie_list, db_collection, mongo_db, tmdb_key):
+    """
+    Fetch additional movie data from TMDB API
+    
+    Args:
+        movie_list: List of movie IDs (strings) or movie documents (dicts)
+        db_collection: MongoDB movies collection
+        mongo_db: MongoDB database instance
+        tmdb_key: TMDB API key
+    """
+    if not movie_list or not tmdb_key:
+        logger.warning("No movies to process or missing TMDB key")
+        return
+        
     base_url = "https://api.themoviedb.org/3/movie/{}?api_key={}"
-
+    
+    # Process movie list to extract valid TMDB IDs
+    movies_with_tmdb = []
+    
+    for item in movie_list:
+        movie_doc = None
+        
+        if isinstance(item, dict):
+            # It's already a movie document
+            movie_doc = item
+        elif isinstance(item, str):
+            # It's a movie ID, fetch from database
+            movie_doc = db_collection.find_one({"movie_id": item})
+        else:
+            logger.warning(f"Invalid movie item type: {type(item)}")
+            continue
+        
+        # Validate TMDB ID
+        if movie_doc and movie_doc.get('tmdb_id'):
+            tmdb_id = str(movie_doc['tmdb_id']).strip()
+            # Validate it's not empty and looks like a valid ID
+            if tmdb_id and tmdb_id.isdigit():
+                movies_with_tmdb.append(movie_doc)
+            else:
+                logger.debug(f"Invalid TMDB ID for movie {movie_doc.get('movie_id')}: '{tmdb_id}'")
+    
+    if not movies_with_tmdb:
+        logger.info("No movies with valid TMDB IDs found")
+        return
+    
+    logger.info(f"Fetching TMDB data for {len(movies_with_tmdb)} movies")
+    
+    # Setup rate limiting for TMDB API (they have strict limits)
+    rate_limiter = RateLimiter(requests_per_second=4)  # TMDB allows ~4 requests/second
+    retry_config = RetryConfig(max_retries=3, base_delay=1.0)
+    
     async with ClientSession() as session:
         tasks = []
         
-        # Fix: Handle both movie objects and movie IDs
-        processed_movies = []
-        for movie in movie_list:
-            if isinstance(movie, dict):
-                # It's a movie object
-                if movie.get('tmdb_id'):
-                    processed_movies.append(movie)
-            elif isinstance(movie, str):
-                # It's a movie ID string - need to fetch from DB
-                movie_doc = db_cursor.find_one({"movie_id": movie})
-                if movie_doc and movie_doc.get('tmdb_id'):
-                    processed_movies.append(movie_doc)
-        
-        # Make requests for movies with TMDB IDs
-        for movie in processed_movies:
-            task = asyncio.ensure_future(
-                fetch_tmdb_data(
-                    base_url.format(movie["tmdb_id"], tmdb_key), 
-                    session, 
-                    movie, 
-                    {"movie_id": movie["movie_id"]}
+        for movie in movies_with_tmdb:
+            try:
+                url = base_url.format(movie["tmdb_id"], tmdb_key)
+                task = asyncio.ensure_future(
+                    fetch_with_retry(
+                        url,
+                        session,
+                        rate_limiter,
+                        retry_config,
+                        input_data={"movie_id": movie["movie_id"], "movie_doc": movie}
+                    )
                 )
-            )
-            tasks.append(task)
+                tasks.append(task)
+            except Exception as e:
+                logger.error(f"Error creating task for movie {movie.get('movie_id')}: {str(e)}")
+                continue
+        
+        # Process responses
+        responses = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        update_operations = []
+        for response in responses:
+            if isinstance(response, Exception):
+                logger.error(f"Task failed with exception: {response}")
+                continue
+                
+            if response and response[0]:  # response is (data, input_data)
+                try:
+                    response_data, input_data = response
+                    operation = await process_tmdb_response(response_data, input_data['movie_doc'])
+                    if operation:
+                        update_operations.append(operation)
+                except Exception as e:
+                    logger.error(f"Error processing TMDB response: {str(e)}")
 
-        # Gather all responses
-        upsert_operations = await asyncio.gather(*tasks)
-
-    try:
-        if len(upsert_operations) > 0:
-            movies = mongo_db.movies
-            movies.bulk_write(upsert_operations, ordered=False)
-    except BulkWriteError as bwe:
-        pprint(bwe.details)
+    # Bulk write to database
+    if update_operations:
+        try:
+            db_collection.bulk_write(update_operations, ordered=False)
+            logger.info(f"Successfully updated {len(update_operations)} movies with TMDB data")
+        except BulkWriteError as bwe:
+            logger.error(f"Bulk write error: {bwe.details}")
+            # Log some details about what failed
+            if hasattr(bwe, 'details') and 'writeErrors' in bwe.details:
+                for error in bwe.details['writeErrors'][:5]:  # Show first 5 errors
+                    logger.error(f"Write error: {error}")
 
 async def process_movie_response(response_data: bytes, input_data: dict) -> Optional[UpdateOne]:
     """Process movie response data and create database update operation"""
@@ -375,81 +434,56 @@ async def process_poster_response(response_data: bytes, input_data: dict) -> Opt
         logger.error(f"Error processing poster for {input_data['movie_id']}: {str(e)}")
         return None
     
-async def process_tmdb_response(response_data: bytes, input_data: dict) -> Optional[UpdateOne]:
+async def process_tmdb_response(response_data: bytes, movie_doc: dict) -> Optional[UpdateOne]:
     """Process TMDB API response data"""
     try:
         import json
         response = json.loads(response_data.decode('utf-8'))
-
-        movie_object = input_data.copy()
-
+        
+        # Start with existing movie data
+        movie_object = {
+            "movie_id": movie_doc["movie_id"],
+            "tmdb_id": movie_doc["tmdb_id"]
+        }
+        
         # Extract object fields
         object_fields = ["genres", "production_countries", "spoken_languages"]
         for field_name in object_fields:
             try:
-                movie_object[field_name] = [x["name"] for x in response[field_name]]
-            except (KeyError, TypeError):
-                movie_object[field_name] = None
+                if field_name in response and response[field_name]:
+                    movie_object[field_name] = [x["name"] for x in response[field_name]]
+                else:
+                    movie_object[field_name] = []
+            except (KeyError, TypeError) as e:
+                logger.debug(f"Could not extract {field_name}: {e}")
+                movie_object[field_name] = []
         
         # Extract simple fields
-        simple_fields = ["popularity", "overview", "runtime", "vote_average", "vote_count", "release_date", "original_language"]
+        simple_fields = ["popularity", "overview", "runtime", "vote_average", 
+                        "vote_count", "release_date", "original_language"]
         for field_name in simple_fields:
             try:
-                movie_object[field_name] = response[field_name]
-            except KeyError:
+                movie_object[field_name] = response.get(field_name)
+            except Exception as e:
+                logger.debug(f"Could not extract {field_name}: {e}")
                 movie_object[field_name] = None
         
         movie_object['last_updated'] = datetime.datetime.now()
-
+        
         return UpdateOne(
-            {"movie_id": input_data["movie_id"]},
+            {"movie_id": movie_doc["movie_id"]},
             {"$set": movie_object},
             upsert=True
         )
 
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON response for movie {movie_doc.get('movie_id')}: {str(e)}")
+        return None
     except Exception as e:
-        logger.error(f"Error processing TMDB data for {input_data['movie_id']}: {str(e)}")
+        logger.error(f"Error processing TMDB data for {movie_doc.get('movie_id')}: {str(e)}")
         return None
 
-async def get_movies_with_rate_limiting(movie_list, db_cursor, mongo_db):
-    """Get movies with proper rate limiting"""
-    url = "https://letterboxd.com/film/{}/"
-    rate_limiter = RateLimiter(requests_per_second=Config.REQUEST_DELAY)
-    
-    async with ClientSession() as session:
-        tasks = []
-        for movie in movie_list:
-            task = asyncio.ensure_future(
-                fetch_with_retry(
-                    url.format(movie), 
-                    session, 
-                    rate_limiter,
-                    input_data={"movie_id": movie}
-                )
-            )
-            tasks.append(task)
-
-        # Process responses with validation
-        responses = await asyncio.gather(*tasks)
-        upsert_operations = []
-        
-        for response_data, input_data in responses:
-            if response_data:
-                operation = await process_movie_response(response_data, input_data)
-                if operation:
-                    upsert_operations.append(operation)
-
-    # Bulk write to database
-    if upsert_operations:
-        try:
-            movies = mongo_db.movies
-            movies.bulk_write(upsert_operations, ordered=False)
-            logger.info(f"Successfully processed {len(upsert_operations)} movies")
-        except BulkWriteError as bwe:
-            logger.error(f"Bulk write error: {bwe.details}")
-
 def main(data_type="letterboxd"):
-    """Main function with improved error handling and rate limiting"""
     """Main function with improved error handling"""
     try:
         with get_database() as (db, tmdb_key):
@@ -483,8 +517,7 @@ def main(data_type="letterboxd"):
                         elif data_type == "poster":
                             await get_movie_posters(chunk, movies)
                         else:
-                            await get_rich_data(chunk, movies, tmdb_key)
-                            pass
+                            await get_rich_data(chunk, movies, db, tmdb_key)
                             
                     except Exception as e:
                         logger.error(f"Error processing chunk {i+1}: {str(e)}")
@@ -494,8 +527,15 @@ def main(data_type="letterboxd"):
                     if i < len(chunks) - 1:
                         await asyncio.sleep(1.0)
 
-            # Run async processing
-            asyncio.run(process_all_chunks())
+            # Run async processing with proper event loop handling
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're already in an async context
+                task = asyncio.create_task(process_all_chunks())
+                loop.run_until_complete(task)
+            else:
+                # If we're in a sync context
+                asyncio.run(process_all_chunks())
             
     except Exception as e:
         logger.error(f"Database connection error: {str(e)}")

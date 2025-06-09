@@ -9,12 +9,7 @@ from pprint import pprint
 from tqdm import tqdm
 import time
 import random
-from db_connect import connect_to_db
-
-# Connect to MongoDB client
-db_name, client, tmdb_key = connect_to_db()
-db = client[db_name]
-users = db.users
+from data_processing.db_connect import get_database
 
 def scrape_user_section(url_template, section_name, max_pages=128):
     """Scrape users from a specific section of Letterboxd"""
@@ -148,42 +143,45 @@ def filter_users_by_activity(users_list):
 def main():
     print("Starting diverse user collection...")
     
-    # Get users from different sections
-    all_users = get_diverse_users()
-    print(f"Total users scraped: {len(all_users)}")
-    
-    # Remove duplicates based on username
-    unique_users = {user['username']: user for user in all_users}.values()
-    print(f"Unique users: {len(unique_users)}")
-    
-    # Balance across activity levels
-    balanced_users = filter_users_by_activity(list(unique_users))
-    print(f"Balanced user set: {len(balanced_users)}")
-    
-    # Prepare bulk update operations
-    update_operations = []
-    for user in balanced_users:
-        user['user_diversity_score'] = calculate_diversity_score(user)
-        update_operations.append(
-            UpdateOne(
-                {"username": user["username"]},
-                {"$set": user},
-                upsert=True
+    with get_database() as (db, tmdb_key):
+        users = db.users
+        
+        # Get users from different sections
+        all_users = get_diverse_users()
+        print(f"Total users scraped: {len(all_users)}")
+        
+        # Remove duplicates based on username
+        unique_users = {user['username']: user for user in all_users}.values()
+        print(f"Unique users: {len(unique_users)}")
+        
+        # Balance across activity levels
+        balanced_users = filter_users_by_activity(list(unique_users))
+        print(f"Balanced user set: {len(balanced_users)}")
+        
+        # Prepare bulk update operations
+        update_operations = []
+        for user in balanced_users:
+            user['user_diversity_score'] = calculate_diversity_score(user)
+            update_operations.append(
+                UpdateOne(
+                    {"username": user["username"]},
+                    {"$set": user},
+                    upsert=True
+                )
             )
-        )
-    
-    # Bulk write to database
-    try:
-        if len(update_operations) > 0:
-            # Write in batches of 1000
-            for i in range(0, len(update_operations), 1000):
-                batch = update_operations[i:i+1000]
-                users.bulk_write(batch, ordered=False)
-                print(f"Wrote batch {i//1000 + 1}")
-    except BulkWriteError as bwe:
-        pprint(bwe.details)
-    
-    print(f"Successfully updated {len(balanced_users)} diverse users")
+        
+        # Bulk write to database
+        try:
+            if len(update_operations) > 0:
+                # Write in batches of 1000
+                for i in range(0, len(update_operations), 1000):
+                    batch = update_operations[i:i+1000]
+                    users.bulk_write(batch, ordered=False)
+                    print(f"Wrote batch {i//1000 + 1}")
+        except BulkWriteError as bwe:
+            pprint(bwe.details)
+        
+        print(f"Successfully updated {len(balanced_users)} diverse users")
 
 def calculate_diversity_score(user):
     """Calculate a diversity score for sampling"""
